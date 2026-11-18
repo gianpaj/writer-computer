@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import sidebarEntryKinds from "@shared/sidebar-entry-kinds.json";
+import { MARKDOWN_EXTENSIONS } from "./paths";
 import type {
   DirEntry,
   FileContent,
@@ -125,7 +126,7 @@ export async function pickFile(): Promise<string | null> {
     directory: false,
     multiple: false,
     title: "Open File",
-    filters: [{ name: "Markdown", extensions: ["md", "mdx", "markdown", "txt"] }],
+    filters: [{ name: "Markdown", extensions: [...MARKDOWN_EXTENSIONS, "txt"] }],
   });
   return selected;
 }

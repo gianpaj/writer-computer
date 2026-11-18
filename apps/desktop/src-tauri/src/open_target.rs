@@ -15,6 +15,7 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Payload emitted to the frontend when a folder or file is opened via
 /// drag-drop, CLI arguments, or the single-instance plugin.
@@ -88,9 +89,17 @@ fn classify(path: &Path) -> Result<PendingOpenPayload, OpenTargetError> {
     Err(OpenTargetError::Unsupported(path.to_path_buf()))
 }
 
-fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+pub(crate) fn is_markdown(path: &Path) -> bool {
+    static EXTENSIONS: OnceLock<Vec<String>> = OnceLock::new();
+    let extensions = EXTENSIONS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../shared/markdown-extensions.json"))
+            .expect("markdown extension registry must be a JSON string array")
+    });
+    path.extension().is_some_and(|ext| {
+        extensions
+            .iter()
+            .any(|supported| ext.eq_ignore_ascii_case(supported))
+    })
 }
 
 #[cfg(test)]
@@ -128,14 +137,42 @@ mod tests {
     }
 
     #[test]
-    fn markdown_extension_matches_both_md_and_markdown_case_insensitively() {
+    fn markdown_extensions_match_case_insensitively() {
         let dir = tempdir().unwrap();
-        for name in ["a.md", "b.MD", "c.markdown", "d.MARKDOWN"] {
+        for name in ["a.md", "b.MD", "c.markdown", "d.MARKDOWN", "e.mdx", "f.MDX"] {
             let path = dir.path().join(name);
             fs::write(&path, "").unwrap();
             let payload = validate_and_resolve(&path).unwrap();
             assert!(payload.file.is_some(), "{name} should resolve as file");
         }
+    }
+
+    #[test]
+    fn bundle_associations_match_the_extension_registry() {
+        let extensions: Vec<String> =
+            serde_json::from_str(include_str!("../../shared/markdown-extensions.json")).unwrap();
+        assert_eq!(extensions, ["md", "markdown", "mdx"]);
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["bundle"]["fileAssociations"][0]["ext"],
+            serde_json::json!(extensions)
+        );
+        let plist = include_str!("../Info.plist");
+        let block = plist
+            .split("<key>CFBundleTypeExtensions</key>")
+            .nth(1)
+            .unwrap()
+            .split("</array>")
+            .next()
+            .unwrap();
+        let strings = regex_lite::Regex::new("<string>([^<]+)</string>").unwrap();
+        let plist_extensions: Vec<_> = strings
+            .captures_iter(block)
+            .map(|capture| capture[1].to_string())
+            .collect();
+        assert_eq!(plist_extensions, extensions);
+        assert!(is_markdown(Path::new("/missing/deleted.mdx")));
     }
 
     #[test]

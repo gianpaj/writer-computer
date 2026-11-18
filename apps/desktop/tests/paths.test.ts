@@ -5,11 +5,61 @@ import {
   getFileName,
   getFileStem,
   getRelativePath,
+  isMarkdownPath,
+  markdownFileName,
   normalizeLocalMarkdownDestination,
   normalizeMarkdownDestination,
   normalizePath,
   resolveLinkTarget,
 } from "../src/lib/paths";
+
+describe("Markdown filenames", () => {
+  test.each(["post.mdx", "post.MDX", "post.markdown", "post.md"])("preserves %s", (name) => {
+    expect(isMarkdownPath(name)).toBe(true);
+    expect(markdownFileName(`  ${name}  `)).toBe(name);
+  });
+
+  test("uses .md for names without a supported extension", () => {
+    expect(markdownFileName("Draft")).toBe("Draft.md");
+    expect(isMarkdownPath("/posts.mdx/component.tsx")).toBe(false);
+    expect(isMarkdownPath("post.mdx.bak")).toBe(false);
+  });
+});
+
+describe("MDX links", () => {
+  test.each(["post.mdx", "post.MDX"])("opens explicit %s links with anchors", async (name) => {
+    expect(await resolveLinkTarget(`./${name}#details`, "/blog/start.md", "/blog")).toEqual({
+      kind: "internal",
+      path: `/blog/${name}`,
+      anchor: "details",
+    });
+  });
+
+  test.each(["post.mdx", "post/index.mdx"])("finds extensionless %s targets", async (file) => {
+    expect(
+      await resolveLinkTarget(
+        "./post",
+        "/blog/start.md",
+        "/blog",
+        (path) => path === `/blog/${file}`,
+      ),
+    ).toEqual({
+      kind: "internal",
+      path: `/blog/${file}`,
+    });
+  });
+
+  test("preserves .md precedence and workspace boundaries", async () => {
+    expect(await resolveLinkTarget("./post", "/blog/start.md", "/blog", () => true)).toEqual({
+      kind: "internal",
+      path: "/blog/post.md",
+    });
+    expect(await resolveLinkTarget("../outside.mdx", "/blog/start.md", "/blog")).toEqual({
+      kind: "external-path",
+      path: "/outside.mdx",
+    });
+  });
+});
 
 describe("getFileExtension", () => {
   test("returns extension for normal files", async () => {
