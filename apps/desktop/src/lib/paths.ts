@@ -1,3 +1,20 @@
+import markdownExtensions from "@shared/markdown-extensions.json";
+
+export const MARKDOWN_EXTENSIONS: readonly string[] = markdownExtensions;
+
+export function isMarkdownPath(path: string): boolean {
+  return MARKDOWN_EXTENSIONS.includes(getFileExtension(path).toLowerCase());
+}
+
+export function stripMarkdownExtension(path: string): string {
+  return isMarkdownPath(path) ? path.slice(0, -(getFileExtension(path).length + 1)) : path;
+}
+
+export function markdownFileName(name: string): string {
+  const trimmed = name.trim();
+  return isMarkdownPath(trimmed) ? trimmed : `${trimmed}.md`;
+}
+
 export function getFileExtension(path: string): string {
   const lastDot = path.lastIndexOf(".");
   const lastSlash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -145,9 +162,10 @@ export async function resolveLinkTarget(
   const resolvedPath = resolvePath(getParentDir(currentFilePath), decodedTarget);
 
   const extension = getFileExtension(resolvedPath).toLowerCase();
-  const isMarkdown = extension === "md" || extension === "markdown";
-
-  if (isMarkdown && (!workspaceRoot || isPathInsideRoot(resolvedPath, workspaceRoot))) {
+  if (
+    isMarkdownPath(resolvedPath) &&
+    (!workspaceRoot || isPathInsideRoot(resolvedPath, workspaceRoot))
+  ) {
     return { kind: "internal", path: resolvedPath, ...(anchor ? { anchor } : {}) };
   }
 
@@ -168,10 +186,8 @@ export async function resolveLinkTarget(
 
     for (const base of bases) {
       const candidates = [
-        `${base}.md`,
-        `${base}.markdown`,
-        `${base}/index.md`,
-        `${base}/index.markdown`,
+        ...MARKDOWN_EXTENSIONS.map((extension) => `${base}.${extension}`),
+        ...MARKDOWN_EXTENSIONS.map((extension) => `${base}/index.${extension}`),
         `${base}/README.md`,
       ];
       for (const candidate of candidates) {

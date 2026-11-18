@@ -1,4 +1,11 @@
-import { getFileStem, getParentDir, normalizePath } from "./paths";
+import {
+  getFileStem,
+  getParentDir,
+  isMarkdownPath,
+  MARKDOWN_EXTENSIONS,
+  normalizePath,
+  stripMarkdownExtension,
+} from "./paths";
 import type { SearchResult } from "@/types/fs";
 
 export type WikiLinkTarget = { kind: "internal"; path: string } | { kind: "unresolved" };
@@ -61,18 +68,12 @@ export function parseWikiLink(raw: string): ParsedWikiLink {
 
 /**
  * Normalize a raw wiki-link target string for resolution:
- * trim whitespace, normalize backslashes, strip .md/.markdown extension.
+ * Trim whitespace, normalize backslashes and strip the Markdown extension.
  */
 export function normalizeWikiTarget(raw: string): string {
   let target = raw.trim().replace(/\\/g, "/");
   target = target.replace(/^\/+/, "");
-  const lower = target.toLowerCase();
-  if (lower.endsWith(".md")) {
-    target = target.slice(0, -3);
-  } else if (lower.endsWith(".markdown")) {
-    target = target.slice(0, -9);
-  }
-  return target;
+  return stripMarkdownExtension(target);
 }
 
 /**
@@ -96,9 +97,18 @@ export async function resolveWikiLink(
   }
   if (!target) return { kind: "unresolved" };
 
+  const requestedPath = splitFragment(link.target)
+    .path.trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+  const explicitPath = isMarkdownPath(requestedPath) ? requestedPath : null;
+
   if (target.includes("/")) {
     const basePath = normalizePath(`${workspaceRoot.replace(/\/$/, "")}/${target}`);
-    const candidatePaths = [`${basePath}.md`, `${basePath}.markdown`];
+    const candidatePaths = MARKDOWN_EXTENSIONS.map((extension) => `${basePath}.${extension}`);
+    if (explicitPath) {
+      candidatePaths.unshift(normalizePath(`${workspaceRoot.replace(/\/$/, "")}/${explicitPath}`));
+    }
     const existence = await Promise.all(candidatePaths.map((path) => fileExists(path)));
     const matchIndex = existence.findIndex(Boolean);
     if (matchIndex !== -1) {
@@ -110,10 +120,14 @@ export async function resolveWikiLink(
   // Stem lookup: find all files whose stem matches (case-insensitive)
   const results = await fuzzySearch(target, 50);
   const targetLower = target.toLowerCase();
-  const exactMatches = results.filter((r) => getFileStem(r.filename).toLowerCase() === targetLower);
+  const stemMatches = results.filter((r) => getFileStem(r.filename).toLowerCase() === targetLower);
+  const exactMatches = explicitPath
+    ? stemMatches.filter((r) => r.filename.toLowerCase() === explicitPath.toLowerCase())
+    : [];
+  const matches = exactMatches.length ? exactMatches : stemMatches;
 
-  if (exactMatches.length === 1) {
-    return { kind: "internal", path: exactMatches[0].path };
+  if (matches.length === 1) {
+    return { kind: "internal", path: matches[0].path };
   }
 
   return { kind: "unresolved" };
@@ -187,8 +201,9 @@ export async function resolveWikiImage(
 
 /**
  * Compute the canonical insertion text for a selected file.
- * Uses the shortest unambiguous form: bare stem when unique,
- * workspace-relative path (without extension) when duplicate stems exist.
+ * Uses a bare stem when unique and a workspace-relative path for duplicates.
+ * Keep the extension
+ * when files in the same folder share a stem.
  */
 export function canonicalWikiTarget(file: SearchResult, allFiles: SearchResult[]): string {
   const stem = getFileStem(file.filename);
@@ -200,12 +215,12 @@ export function canonicalWikiTarget(file: SearchResult, allFiles: SearchResult[]
 
   if (!hasDuplicate) return stem;
 
-  return stripMdExtension(file.relative_path);
-}
-
-function stripMdExtension(path: string): string {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".md")) return path.slice(0, -3);
-  if (lower.endsWith(".markdown")) return path.slice(0, -9);
-  return path;
+  const relativeStem = stripMarkdownExtension(file.relative_path);
+  const samePathStem = allFiles.some(
+    (f) =>
+      f.path !== file.path &&
+      stripMarkdownExtension(f.relative_path).toLowerCase() === relativeStem.toLowerCase(),
+  );
+  const target = samePathStem ? file.relative_path : relativeStem;
+  return target.includes("/") ? target : `./${target}`;
 }

@@ -57,6 +57,48 @@ describe("autosave", () => {
     vi.useRealTimers();
   });
 
+  test("preserves frontmatter, imports and JSX when saving an MDX post", async () => {
+    const path = "/blog/post.mdx";
+    const source = [
+      "---",
+      'title: "Post"',
+      "pubDate: 2026-06-16",
+      "---",
+      "",
+      'import Chart from "../../components/Chart.tsx";',
+      "",
+      "# Heading",
+      "",
+      "Original paragraph.",
+      "",
+      "{/* more */}",
+      "",
+      "<Chart client:load values={[1, 2, 3]} />",
+      "",
+      "{1 + 2}",
+      "",
+    ].join("\n");
+    let saved = "";
+    mockedInvoke.mockImplementation((command, payload) => {
+      if (command === "read_file")
+        return Promise.resolve({ path, content: source, modified_at: 1 });
+      if (command === "write_file") {
+        saved = (payload as { content: string }).content;
+        return Promise.resolve({ path, modified_at: 2 });
+      }
+      return Promise.resolve(null);
+    });
+    await useEditorStore.getState().openFile(path);
+    const opened = useEditorStore.getState().openFiles.get(path)!;
+    expect(opened.title).toBe("Post");
+    useEditorStore
+      .getState()
+      .updateContent(path, opened.content.replace("Original paragraph.", "Edited paragraph."));
+    await flushMicrotasks();
+    expect(saved).toBe(source.replace("Original paragraph.", "Edited paragraph."));
+    expect(useEditorStore.getState().openFiles.get(path)?.isDirty).toBe(false);
+  });
+
   test("keeps newer edits dirty until a follow-up save completes", async () => {
     const firstWrite = deferred<{ path: string; modified_at: number }>();
     const secondWrite = deferred<{ path: string; modified_at: number }>();

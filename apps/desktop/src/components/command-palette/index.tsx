@@ -33,14 +33,12 @@ import { useFuzzySearch } from "./use-fuzzy-search";
 import { useGlobalRecentFiles } from "@/hooks/use-global-recent-files";
 import { openStandaloneFile } from "@/hooks/use-open-drop";
 import { settingsKind } from "@/components/editor-area/page-kinds/settings";
-import { getFileName, getFileStem, getParentDir } from "@/lib/paths";
+import { getFileName, getFileStem, getParentDir, markdownFileName } from "@/lib/paths";
 import * as tauri from "@/lib/tauri";
 import type { RecentFile } from "@/lib/tauri";
 
 function toCreatePath(root: string, rawName: string) {
-  const trimmed = rawName.trim();
-  const fileName = trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
-  return `${root}/${fileName}`;
+  return `${root}/${markdownFileName(rawName)}`;
 }
 
 function matchesSearch(text: string, q: string) {

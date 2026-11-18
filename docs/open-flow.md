@@ -25,10 +25,17 @@ Every entry point funnels through `open_target::classify()`:
 Input path
   ├─ is_dir?    → { workspace: canonicalize(path),   file: None }
   ├─ is_file?
-  │   └─ .md/.markdown (case-insensitive)?
-  │       → { workspace: canonicalize(parent), file: canonicalize(path) }
+  │   └─ supported Markdown extension (case-insensitive)?
+  │       → { workspace: None, file: canonicalize(path) }
   └─ otherwise  → None (lenient) / Error (strict CLI)
 ```
+
+`apps/desktop/shared/markdown-extensions.json` owns the supported extensions.
+Rust's `open_target::is_markdown` checks extensions without reading the filesystem,
+so it also recognizes paths removed by external editors. Sidebar listings,
+search, recents and the watcher use the same check. Frontend path helpers and
+the file picker read the same registry. Tests keep Tauri and macOS document
+associations aligned with it.
 
 ## 1. Cold Start (`writer .`, Finder open, dock drop while not running)
 
@@ -94,7 +101,7 @@ sequenceDiagram
     WV->>Rust: WindowEvent::DragDrop { paths }
     loop First valid path in drop
         Rust->>Rust: resolve_path(path)
-        Note over Rust: Lenient: skip non-dir / non-.md
+        Note over Rust: Lenient: skip unsupported paths
     end
     Rust->>State: push_pending_open(payload)  (runtime queue)
     Rust->>WV: emit_to(label, "open:from-drop", payload)
@@ -115,7 +122,7 @@ sequenceDiagram
 
 ## 3. Dock Drop / Finder Open While Running
 
-Dragging onto the dock icon (or double-clicking a `.md` in Finder via the
+Dragging onto the dock icon (or double-clicking a Markdown file in Finder via the
 `fileAssociations` registration) fires `RunEvent::Opened`. The handler routes by
 whether a window already hosts the workspace, whether the main startup slot is
 still unread, and whether the main window is already visible.

@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::ignore::WorkspaceIgnore;
+use crate::open_target::is_markdown;
 use crate::state::{AppState, WorkspaceState};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -134,7 +135,7 @@ pub(crate) fn created_time(path: &std::path::Path) -> u64 {
         .unwrap_or(0)
 }
 
-/// Recursively checks if a directory contains at least one visible .md file.
+/// Recursively checks if a directory contains a visible Markdown file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectoryContent {
     Markdown,
@@ -171,7 +172,7 @@ fn classify_directory_content(
             continue;
         };
         if file_type.is_file() {
-            if entry_path.extension().and_then(|e| e.to_str()) == Some("md") {
+            if is_markdown(&entry_path) {
                 return Ok(DirectoryContent::Markdown);
             }
             content = DirectoryContent::Other;
@@ -290,20 +291,17 @@ pub fn read_directory_impl(
                     title: None,
                 });
             }
-        } else if file_type.is_file() {
-            let is_markdown = entry_path.extension().and_then(|e| e.to_str()) == Some("md");
-            if is_markdown {
-                let title = extract_title(&entry_path);
-                files.push(DirEntry {
-                    name,
-                    path: entry_path.to_string_lossy().to_string(),
-                    is_dir: false,
-                    is_markdown: true,
-                    modified_at: modified_time(&entry_path),
-                    created_at: created_time(&entry_path),
-                    title,
-                });
-            }
+        } else if file_type.is_file() && is_markdown(&entry_path) {
+            let title = extract_title(&entry_path);
+            files.push(DirEntry {
+                name,
+                path: entry_path.to_string_lossy().to_string(),
+                is_dir: false,
+                is_markdown: true,
+                modified_at: modified_time(&entry_path),
+                created_at: created_time(&entry_path),
+                title,
+            });
         }
     }
 
@@ -384,11 +382,7 @@ pub async fn write_file(
 }
 
 pub(crate) fn markdown_file_entry(path: &Path) -> Option<DirEntry> {
-    if !path.is_file()
-        || !path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("md"))
-    {
+    if !path.is_file() || !is_markdown(path) {
         return None;
     }
 
@@ -767,6 +761,54 @@ mod tests {
         fs::create_dir(dir.path().join("empty")).unwrap();
         fs::write(dir.path().join("empty").join("data.txt"), "data").unwrap();
         dir
+    }
+
+    #[test]
+    fn mdx_only_folders_are_visible_before_and_after_indexing() {
+        let dir = TempDir::new().unwrap();
+        let blog = dir.path().join("posts.mdx").join("nested");
+        fs::create_dir_all(&blog).unwrap();
+        for name in ["post.mdx", "upper.MDX", "guide.markdown"] {
+            fs::write(blog.join(name), "---\ntitle: Blog post\n---\n\nText").unwrap();
+        }
+        fs::write(blog.join("component.tsx"), "export default null").unwrap();
+        let state = WorkspaceState::default();
+        for indexed in [false, true] {
+            if indexed {
+                let (files, dirs) = crate::commands::search::index_workspace_impl(
+                    dir.path(),
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                );
+                assert_eq!(files.len(), 3);
+                assert_eq!(
+                    crate::commands::search::fuzzy_search_impl("post.mdx", &files, 10).len(),
+                    1
+                );
+                *state.file_index.write() = files;
+                *state.dirs_with_markdown.write() = dirs;
+                state.index_ready.store(true, Ordering::Relaxed);
+            }
+            let root_entries =
+                read_directory_impl(&dir.path().to_string_lossy(), Some(&state)).unwrap();
+            assert_eq!(root_entries.len(), 1);
+            assert_eq!(root_entries[0].name, "posts.mdx");
+            assert!(root_entries[0].is_dir);
+            let folders = read_directory_impl(
+                &dir.path().join("posts.mdx").to_string_lossy(),
+                Some(&state),
+            )
+            .unwrap();
+            assert_eq!(folders[0].name, "nested");
+            let entries = read_directory_impl(&blog.to_string_lossy(), Some(&state)).unwrap();
+            assert_eq!(entries.len(), 3);
+            assert!(entries
+                .iter()
+                .all(|entry| entry.is_markdown && entry.title.as_deref() == Some("Blog post")));
+            assert!(markdown_file_entry(&blog.join("post.mdx")).is_some());
+            if indexed {
+                assert_eq!(read_recent_files_impl(&state, 10, 0).len(), 3);
+            }
+        }
     }
 
     #[test]

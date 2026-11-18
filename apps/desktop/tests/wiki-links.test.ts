@@ -14,6 +14,11 @@ import type { SearchResult } from "../src/types/fs";
 // ---------------------------------------------------------------------------
 
 describe("normalizeWikiTarget", () => {
+  test("strips MDX extensions case-insensitively", () => {
+    expect(normalizeWikiTarget("  blog/Post.mdx  ")).toBe("blog/Post");
+    expect(normalizeWikiTarget("blog/Post.MDX")).toBe("blog/Post");
+  });
+
   test("trims whitespace", () => {
     expect(normalizeWikiTarget("  Roadmap  ")).toBe("Roadmap");
   });
@@ -316,6 +321,63 @@ describe("resolveWikiLink", () => {
 // ---------------------------------------------------------------------------
 
 describe("canonicalWikiTarget", () => {
+  test.each(["Post.md", "Post.mdx", "blog/Post.md", "blog/Post.mdx"])(
+    "round trips %s when Markdown and MDX share a stem",
+    async (relativePath) => {
+      const folder = relativePath.includes("/") ? "blog/" : "";
+      const files = ["Post.md", "Post.mdx"].map((name) =>
+        makeResult({
+          path: `/vault/${folder}${name}`,
+          relative_path: `${folder}${name}`,
+        }),
+      );
+      const selected = files.find((file) => file.relative_path === relativePath)!;
+      const target = canonicalWikiTarget(selected, files);
+      expect(target).toBe(relativePath.includes("/") ? relativePath : `./${relativePath}`);
+      expect(
+        await resolveWikiLink(target, "/vault", vi.fn().mockResolvedValue(files), async (path) =>
+          files.some((file) => file.path === path),
+        ),
+      ).toEqual({
+        kind: "internal",
+        path: selected.path,
+      });
+    },
+  );
+
+  test("resolves an extensionless workspace path to MDX", async () => {
+    expect(
+      await resolveWikiLink(
+        "blog/Post",
+        "/vault",
+        vi.fn(),
+        async (path) => path === "/vault/blog/Post.mdx",
+      ),
+    ).toEqual({
+      kind: "internal",
+      path: "/vault/blog/Post.mdx",
+    });
+  });
+
+  test("round trips case variants and root files with duplicate basenames elsewhere", async () => {
+    const files = ["Post.md", "post.mdx", "archive/post.mdx"].map((relative_path) =>
+      makeResult({ path: `/vault/${relative_path}`, relative_path }),
+    );
+    for (const selected of files) {
+      expect(
+        await resolveWikiLink(
+          canonicalWikiTarget(selected, files),
+          "/vault",
+          vi.fn().mockResolvedValue(files),
+          async (path) => files.some((file) => file.path === path),
+        ),
+      ).toEqual({
+        kind: "internal",
+        path: selected.path,
+      });
+    }
+  });
+
   test("returns bare stem for unique filename", () => {
     const file = makeResult({ path: "/vault/Roadmap.md", relative_path: "Roadmap.md" });
     const allFiles = [file, makeResult({ path: "/vault/Notes.md", relative_path: "Notes.md" })];
